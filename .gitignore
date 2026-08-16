@@ -1,0 +1,36 @@
+# dependencies
+node_modules/
+
+# builds
+dist/
+server/dist/
+client/dist/
+
+# runtime data
+data/
+downloads/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# logs
+*.log
+npm-debug.log*
+
+# env
+.env
+.env.local
+
+# local binaries / deploy artifacts
+bin/
+*.tar.gz
+*.tgz
+
+# os
+.DS_Store
+Thumbs.db
+
+# editor
+.idea/
+.vscode/

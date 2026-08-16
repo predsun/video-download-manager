@@ -1,0 +1,20 @@
+services:
+  app:
+    build: .
+    container_name: video-download-manager
+    ports:
+      - "8787:8787"
+    environment:
+      - PORT=8787
+      - HOST=0.0.0.0
+      - MAX_CONCURRENCY=3
+      - DATA_DIR=/app/data
+      - DOWNLOAD_DIR=/downloads
+    volumes:
+      - vdm-data:/app/data
+      - vdm-downloads:/downloads
+    restart: unless-stopped
+
+volumes:
+  vdm-data:
+  vdm-downloads:
