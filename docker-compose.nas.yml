@@ -1,0 +1,6 @@
+# NAS override: bind mounts so downloads are visible in File Station
+services:
+  app:
+    volumes:
+      - /share/CACHEDEV1_DATA/vdm/data:/app/data
+      - /share/CACHEDEV3_DATA/media/VideoDownloadManager:/downloads

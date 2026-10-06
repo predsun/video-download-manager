@@ -19,11 +19,13 @@ export interface DownloadController {
   kill: () => void;
 }
 
+// 下载结果：最终文件路径由队列在输出目录中扫描得到（见 queue.findFinalFile），
+// 因此这里不再回传路径，避免出现永远为 null 的冗余字段。
 export type DownloadOutcome =
-  | { status: 'completed'; filePath: string | null }
-  | { status: 'paused'; filePath: string | null }
-  | { status: 'cancelled'; filePath: string | null }
-  | { status: 'failed'; filePath: string | null; error: { code: string; message: string } };
+  | { status: 'completed' }
+  | { status: 'paused' }
+  | { status: 'cancelled' }
+  | { status: 'failed'; error: { code: string; message: string } };
 
 export interface ActiveDownload {
   controller: DownloadController;
@@ -44,12 +46,22 @@ function buildFormatSelector(quality: string, format: string, hasFfmpeg: boolean
     return `b${heightFilter}/best`;
   }
 
-  if (format === 'mkv') return `bv*${heightFilter}+ba/b${heightFilter}/best`;
-  if (format === 'best') return `bv*${heightFilter}+ba/b${heightFilter}/best`;
-  return `bv*${heightFilter}[ext=${format}]+ba[ext=m4a]/b${heightFilter}[ext=${format}]/bv*${heightFilter}+ba/b${heightFilter}/best`;
+  // mkv / best（自动）：mkv 容器支持 VP9/AV1/Opus 等所有编码，是「最高质量」的最稳妥选择
+  if (format === 'mkv' || format === 'best') {
+    return `bv*${heightFilter}+ba/b${heightFilter}/best`;
+  }
+  // mp4：只选 mp4 视频 + m4a 音频，避免把 VP9/AV1/Opus 塞进 mp4 导致合并失败
+  if (format === 'mp4') {
+    return `bv*${heightFilter}[ext=mp4]+ba[ext=m4a]/b${heightFilter}[ext=mp4]/bv*${heightFilter}[ext=mp4]+ba/b${heightFilter}[ext=mp4]/best[ext=mp4]/best`;
+  }
+  // webm：只选 webm 视频(VP9/AV1) + webm 音频(Opus)
+  if (format === 'webm') {
+    return `bv*${heightFilter}[ext=webm]+ba[ext=webm]/b${heightFilter}[ext=webm]/bv*${heightFilter}[ext=webm]+ba/b${heightFilter}[ext=webm]/best[ext=webm]/best`;
+  }
+  return `bv*${heightFilter}+ba/b${heightFilter}/best`;
 }
 
-function buildArgs(ctx: DownloadContext, hasFfmpeg: boolean): { args: string[]; extractAudio: boolean; mergeFormat: string | null } {
+function buildArgs(ctx: DownloadContext, hasFfmpeg: boolean): string[] {
   const { taskId, url, quality, format, outputDir, settings } = ctx;
   const selector = buildFormatSelector(quality, format, hasFfmpeg);
 
@@ -64,9 +76,9 @@ function buildArgs(ctx: DownloadContext, hasFfmpeg: boolean): { args: string[]; 
       extractAudio = true;
     }
   } else if (hasFfmpeg) {
-    if (format === 'mkv') mergeFormat = 'mkv';
+    if (format === 'mp4') mergeFormat = 'mp4';
     else if (format === 'webm') mergeFormat = 'webm';
-    else mergeFormat = 'mp4'; // best / mp4 → mp4 容器
+    else mergeFormat = 'mkv'; // best / mkv → mkv 容器（兼容 VP9/AV1/Opus 等所有编码）
   }
 
   const args: string[] = [
@@ -106,9 +118,12 @@ function buildArgs(ctx: DownloadContext, hasFfmpeg: boolean): { args: string[]; 
 
   args.push(url.trim());
 
-  return { args, extractAudio, mergeFormat };
+  return args;
 }
 
+// 结束 yt-dlp 进程树。注意：Windows 上控制台程序收不到 SIGTERM，
+// 因此无论 «暂停» 还是 «取消» 都用 taskkill /T /F 强制结束；
+// .part 分片文件会保留，恢复下载时由 yt-dlp --continue 断点续传。
 function killProcessTree(child: ChildProcess, force: boolean): Promise<void> {
   return new Promise((resolve) => {
     const pid = child.pid;
@@ -176,7 +191,6 @@ export function runDownload(ctx: DownloadContext): ActiveDownload {
   if (!bin) {
     const failed: DownloadOutcome = {
       status: 'failed',
-      filePath: null,
       error: { code: 'YTDLP_NOT_FOUND', message: ErrorMessages.YTDLP_NOT_FOUND },
     };
     return { controller: { stop: () => {}, kill: () => {} }, promise: Promise.resolve(failed) };
@@ -186,19 +200,17 @@ export function runDownload(ctx: DownloadContext): ActiveDownload {
 
   let args: string[];
   try {
-    ({ args } = buildArgs(ctx, hasFfmpeg));
+    args = buildArgs(ctx, hasFfmpeg);
   } catch (err) {
     const e = err as AppError;
     const failed: DownloadOutcome = {
       status: 'failed',
-      filePath: null,
       error: { code: e.code, message: e.message },
     };
     return { controller: { stop: () => {}, kill: () => {} }, promise: Promise.resolve(failed) };
   }
 
   let mode: 'running' | 'stopping' | 'killing' = 'running';
-  let filePath: string | null = null;
   let stderrTail = '';
   let lastActivity = Date.now();
   let watchdog: NodeJS.Timeout | null = null;
@@ -221,7 +233,10 @@ export function runDownload(ctx: DownloadContext): ActiveDownload {
   };
 
   const promise = new Promise<DownloadOutcome>((resolve) => {
+    let settled = false;
     const settle = (outcome: DownloadOutcome) => {
+      if (settled) return; // watchdog 与 close 事件可能同时触发，只结算一次
+      settled = true;
       if (watchdog) clearInterval(watchdog);
       resolve(outcome);
     };
@@ -232,20 +247,19 @@ export function runDownload(ctx: DownloadContext): ActiveDownload {
       if (Date.now() - lastActivity > stallMs) {
         mode = 'killing';
         void killProcessTree(child, true);
-        settle({
-          status: 'failed',
-          filePath,
-          error: { code: 'TIMEOUT', message: ErrorMessages.TIMEOUT },
-        });
+        settle({ status: 'failed', error: { code: 'TIMEOUT', message: ErrorMessages.TIMEOUT } });
       }
     }, 1000);
 
+    // yt-dlp 的进度行是完整 JSON，但可能被数据分块切断，这里做行缓冲避免丢行
+    let stdoutBuf = '';
     child.stdout.on('data', (d: Buffer) => {
       lastActivity = Date.now();
-      for (const rawLine of d.toString().split(/\r?\n/)) {
-        const line = rawLine.trim();
-        if (!line) continue;
-        const p = parseProgress(line);
+      stdoutBuf += d.toString();
+      const lines = stdoutBuf.split(/\r?\n/);
+      stdoutBuf = lines.pop() ?? '';
+      for (const line of lines) {
+        const p = parseProgress(line.trim());
         if (p) ctx.onProgress(p);
       }
     });
@@ -259,26 +273,22 @@ export function runDownload(ctx: DownloadContext): ActiveDownload {
       if (mode === 'running') mode = 'killing';
       settle({
         status: 'failed',
-        filePath,
         error: { code: 'NETWORK_ERROR', message: err.message || ErrorMessages.NETWORK_ERROR },
       });
     });
 
     child.on('close', (code) => {
-      if (mode === 'killing') {
-        settle({ status: 'cancelled', filePath });
-        return;
+      // 冲刷最后一段没有换行结尾的进度行
+      if (stdoutBuf.trim()) {
+        const p = parseProgress(stdoutBuf.trim());
+        if (p) ctx.onProgress(p);
+        stdoutBuf = '';
       }
-      if (mode === 'stopping') {
-        settle({ status: 'paused', filePath });
-        return;
-      }
-      if (code === 0) {
-        settle({ status: 'completed', filePath });
-        return;
-      }
+      if (mode === 'killing') return settle({ status: 'cancelled' });
+      if (mode === 'stopping') return settle({ status: 'paused' });
+      if (code === 0) return settle({ status: 'completed' });
       const { code: errCode, message } = classifyYtdlpError(stderrTail);
-      settle({ status: 'failed', filePath, error: { code: errCode, message } });
+      settle({ status: 'failed', error: { code: errCode, message } });
     });
   });
 

@@ -30,9 +30,10 @@ export function getSystemInfo(): SystemInfo {
     dbSize = 0;
   }
 
+  // 磁盘统计以「下载目录」所在的文件系统为准（下载保存位置才是用户关心的磁盘）
   let disk = { total: 0, free: 0, used: 0 };
   try {
-    const s = statfsSync(config.rootDir);
+    const s = statfsSync(settings.downloadDir);
     disk = {
       total: Number(s.blocks) * Number(s.bsize),
       free: Number(s.bavail) * Number(s.bsize),

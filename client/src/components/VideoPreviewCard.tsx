@@ -18,9 +18,7 @@ interface VideoPreviewCardProps {
 export function VideoPreviewCard({ result, url, onAdded }: VideoPreviewCardProps) {
   const { toast } = useToast();
   const [quality, setQuality] = useState(result.qualities[0]?.value ?? 'best');
-  const [format, setFormat] = useState(
-    result.formats.some((f) => f.value === 'mp4') ? 'mp4' : result.formats[0]?.value ?? 'best',
-  );
+  const [format, setFormat] = useState(result.formats[0]?.value ?? 'best');
   const [adding, setAdding] = useState(false);
 
   const isAudio = quality === 'audio';

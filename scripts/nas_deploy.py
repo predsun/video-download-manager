@@ -17,7 +17,7 @@ PASS = os.environ.get("NAS_PASS", "")
 
 DOCKER_BIN_DIR = "/share/CACHEDEV1_DATA/.qpkg/container-station/usr/bin"
 APP_DIR = "/share/CACHEDEV1_DATA/vdm"
-DL_DIR = "/share/CACHEDEV1_DATA/Public/VideoDownloadManager"
+DL_DIR = "/share/CACHEDEV3_DATA/media/VideoDownloadManager"
 TAR_LOCAL = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "vdm-deploy.tar.gz"))
 TAR_REMOTE = "/share/CACHEDEV1_DATA/vdm-deploy.tar.gz"
 
@@ -30,7 +30,7 @@ services:
   app:
     volumes:
       - /share/CACHEDEV1_DATA/vdm/data:/app/data
-      - /share/CACHEDEV1_DATA/Public/VideoDownloadManager:/downloads
+      - /share/CACHEDEV3_DATA/media/VideoDownloadManager:/downloads
 """
 
 

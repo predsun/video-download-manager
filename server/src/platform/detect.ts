@@ -67,6 +67,30 @@ export function validateUrl(input: string): { ok: boolean; url?: URL; error?: st
   return { ok: true, url };
 }
 
+// 归一化视频链接：去掉 YouTube 的播放列表/电台参数（list / start_radio / index / si 等），
+// 只保留视频 ID，避免 yt-dlp 走电台/播放列表解析路径而触发更严格的风控
+export function normalizeVideoUrl(rawUrl: string): string {
+  const input = (rawUrl ?? '').trim();
+  try {
+    const url = new URL(input);
+    const host = url.hostname.toLowerCase();
+
+    if (/(^|\.)youtube\.com$|youtube-nocookie\.com$/.test(host)) {
+      const v = url.searchParams.get('v');
+      if (v) return `https://www.youtube.com/watch?v=${v}`;
+      return input;
+    }
+    if (host === 'youtu.be') {
+      const id = url.pathname.split('/').filter(Boolean)[0];
+      if (id) return `https://youtu.be/${id}`;
+      return input;
+    }
+    return input;
+  } catch {
+    return input;
+  }
+}
+
 export function detectPlatform(rawUrl: string): PlatformInfo | null {
   const url = normalizeUrl(rawUrl);
   if (!url) return null;

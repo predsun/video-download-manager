@@ -151,6 +151,27 @@ class Database {
     this.db.prepare('DELETE FROM tasks WHERE id = ?').run(id);
   }
 
+  // 高频进度更新专用：只更新进度相关列，省去「读整行 → 合并 → 写回 21 列」的开销
+  updateTaskProgress(
+    id: string,
+    p: { downloadedBytes: number; progress?: number; speed: number | null; eta: number | null; filesize?: number },
+  ): void {
+    this.db
+      .prepare(
+        `UPDATE tasks SET downloaded_bytes = ?, progress = COALESCE(?, progress),
+         speed = ?, eta = ?, filesize = COALESCE(?, filesize), updated_at = ? WHERE id = ?`,
+      )
+      .run(
+        p.downloadedBytes,
+        p.progress ?? null,
+        p.speed,
+        p.eta,
+        p.filesize ?? null,
+        Date.now(),
+        id,
+      );
+  }
+
   getSetting(key: string): string | null {
     const row = this.db.prepare('SELECT value FROM settings WHERE key = ?').get(key) as
       | { value: string }

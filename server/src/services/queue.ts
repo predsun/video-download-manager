@@ -6,7 +6,7 @@ import { broadcastTask } from './broadcast';
 import { ActiveDownload, runDownload } from './downloader';
 import { parseUrl } from './parser';
 import { ErrorMessages } from '../errors';
-import { ProgressEvent, Task } from '../types';
+import { ProgressEvent } from '../types';
 
 function fileSizeOf(fp: string | null): number | null {
   if (!fp) return null;
@@ -231,25 +231,33 @@ class TaskQueue {
     const total = p.totalBytes;
     const progress = total && total > 0 ? Math.min(100, (p.downloadedBytes / total) * 100) : 0;
 
-    const patch: Partial<Task> = {
-      downloadedBytes: p.downloadedBytes,
-      speed: p.speed,
-      eta: p.eta,
-    };
-    if (total) patch.filesize = total;
-    if (progress > 0) patch.progress = progress;
-
+    // 高频更新：落库节流 1s（走精简 UPDATE），前端广播节流 250ms
     const lp = this.lastPersist.get(taskId) ?? 0;
     if (now - lp >= 1000) {
       this.lastPersist.set(taskId, now);
-      db.updateTask(taskId, patch);
+      db.updateTaskProgress(taskId, {
+        downloadedBytes: p.downloadedBytes,
+        progress: progress > 0 ? progress : undefined,
+        speed: p.speed,
+        eta: p.eta,
+        filesize: total ?? undefined,
+      });
     }
 
     const lb = this.lastBroadcast.get(taskId) ?? 0;
     if (now - lb >= 250) {
       this.lastBroadcast.set(taskId, now);
       const t = db.getTask(taskId);
-      if (t) broadcastTask({ ...t, ...patch });
+      if (t) {
+        broadcastTask({
+          ...t,
+          downloadedBytes: p.downloadedBytes,
+          speed: p.speed,
+          eta: p.eta,
+          ...(total ? { filesize: total } : {}),
+          ...(progress > 0 ? { progress } : {}),
+        });
+      }
     }
   }
 
@@ -266,7 +274,7 @@ class TaskQueue {
     const t = db.getTask(taskId);
     if (t && (t.status === 'waiting' || t.status === 'parsing')) {
       db.updateTask(taskId, { status: 'paused' });
-      broadcastTask(db.getTask(taskId)!);
+      broadcastTask({ ...t, status: 'paused' });
     }
   }
 

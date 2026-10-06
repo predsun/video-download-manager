@@ -1,5 +1,5 @@
 import { findFfmpeg, findYtdlp, runYtdlp } from './ytdlp';
-import { detectPlatform } from '../platform/detect';
+import { detectPlatform, normalizeVideoUrl } from '../platform/detect';
 import { AppError, classifyYtdlpError, ErrorMessages } from '../errors';
 import { getSettings } from './settings';
 import {
@@ -68,6 +68,15 @@ function sizeOr(f: VideoFormat): number | null {
   return f.filesize ?? f.filesizeApprox ?? null;
 }
 
+// 与 yt-dlp 的默认编码优先级保持一致（同分辨率下 AV1 > VP9 > H.264）
+function codecRank(vcodec: string): number {
+  const c = vcodec.toLowerCase();
+  if (c.includes('av01') || c.includes('av1')) return 3;
+  if (c.includes('vp9') || c.includes('vp09')) return 2;
+  if (c.includes('avc1') || c.includes('h264')) return 1;
+  return 0;
+}
+
 function buildQualities(formats: VideoFormat[], totalFilesize: number | null): QualityOption[] {
   const videoFormats = formats.filter((f) => f.vcodec !== 'none' && f.height != null);
   const audioFormats = formats.filter((f) => f.acodec !== 'none' && f.vcodec === 'none');
@@ -80,18 +89,35 @@ function buildQualities(formats: VideoFormat[], totalFilesize: number | null): Q
     .filter((h) => VIDEO_HEIGHTS.includes(h))
     .sort((a, b) => b - a);
 
+  // 复现 yt-dlp 的 bv* 排序：分辨率 → 帧率 → 编码(AV1>VP9>H.264) → 码率，
+  // 使预估大小与实际下载选择的流一致
+  const pickBest = (maxHeight: number | null): VideoFormat | null => {
+    const pool =
+      maxHeight == null ? videoFormats : videoFormats.filter((f) => (f.height ?? 0) <= maxHeight);
+    if (pool.length === 0) return null;
+    return [...pool].sort((a, b) => {
+      const rh = (b.height ?? 0) - (a.height ?? 0);
+      if (rh !== 0) return rh;
+      const rf = (b.fps ?? 0) - (a.fps ?? 0);
+      if (rf !== 0) return rf;
+      const rc = codecRank(b.vcodec) - codecRank(a.vcodec);
+      if (rc !== 0) return rc;
+      return (sizeOr(b) ?? 0) - (sizeOr(a) ?? 0);
+    })[0];
+  };
+
+  const estSize = (maxHeight: number | null): number | null => {
+    const f = pickBest(maxHeight);
+    const vs = f ? sizeOr(f) : null;
+    return vs != null && bestAudioSize != null ? vs + bestAudioSize : vs;
+  };
+
   const qualities: QualityOption[] = [
-    { value: 'best', label: '最佳质量', height: null, filesize: totalFilesize },
+    { value: 'best', label: '最佳质量', height: null, filesize: estSize(null) ?? totalFilesize },
   ];
 
   for (const h of heights) {
-    const candidates = videoFormats.filter((f) => f.height === h);
-    const best = candidates
-      .map(sizeOr)
-      .filter((n): n is number => n != null)
-      .sort((a, b) => b - a)[0] ?? null;
-    const est = best != null && bestAudioSize != null ? best + bestAudioSize : best;
-    qualities.push({ value: String(h), label: `${h}p`, height: h, filesize: est });
+    qualities.push({ value: String(h), label: `${h}p`, height: h, filesize: estSize(h) });
   }
 
   if (audioFormats.length > 0) {
@@ -112,7 +138,8 @@ function buildFormatOptions(formats: VideoFormat[], hasFfmpeg: boolean): FormatO
 }
 
 export async function parseUrl(rawUrl: string): Promise<ParseResult> {
-  const platform = detectPlatform(rawUrl);
+  const cleanUrl = normalizeVideoUrl(rawUrl);
+  const platform = detectPlatform(cleanUrl);
   if (!platform) {
     throw new AppError('UNSUPPORTED_PLATFORM', ErrorMessages.UNSUPPORTED_PLATFORM, 400);
   }
@@ -131,7 +158,7 @@ export async function parseUrl(rawUrl: string): Promise<ParseResult> {
     String(settings.timeoutSec),
     '--retries',
     String(settings.retries),
-    rawUrl.trim(),
+    cleanUrl,
   ];
   const res = await runYtdlp(args, settings.timeoutSec * 1000 * 2);
 

@@ -3,7 +3,7 @@ import { getDb } from '../db';
 import { getSettings } from './settings';
 import { queue } from './queue';
 import { broadcast, broadcastTask } from './broadcast';
-import { detectPlatform } from '../platform/detect';
+import { detectPlatform, normalizeVideoUrl } from '../platform/detect';
 import { AppError, ErrorMessages } from '../errors';
 import { Task, TaskStatus } from '../types';
 
@@ -11,7 +11,7 @@ const ACTIVE_STATUSES: TaskStatus[] = ['waiting', 'parsing', 'downloading', 'pau
 
 // 创建任务：立即入队（不做网络解析），由队列工作线程异步完成「解析 → 下载」。
 export async function createTask(input: { url: string; quality?: string; format?: string }): Promise<Task> {
-  const url = input.url.trim();
+  const url = normalizeVideoUrl(input.url.trim());
   const platform = detectPlatform(url);
   if (!platform) {
     throw new AppError('UNSUPPORTED_PLATFORM', ErrorMessages.UNSUPPORTED_PLATFORM, 400);

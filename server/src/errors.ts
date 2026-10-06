@@ -15,6 +15,7 @@ export const ErrorMessages: Record<string, string> = {
   UNSUPPORTED_PLATFORM: '当前平台不支持',
   VIDEO_NOT_FOUND: '视频不存在或已被删除',
   VIDEO_UNAVAILABLE: '视频资源不可访问（可能受地区限制、需登录或已私有化）',
+  BOT_DETECTED: '被平台人机验证拦截（疑似风控），请稍后重试',
   NETWORK_ERROR: '网络连接中断，请检查网络后重试',
   DOWNLOAD_FAILED: '下载失败',
   TIMEOUT: '下载超时，请稍后重试',
