@@ -31,6 +31,12 @@ const server = http.createServer((req, res) => {
     return;
   }
 
+  // 永不响应：用于验证应用的超时保护（请求不应永久挂起）
+  if (url.pathname === '/hang.mp4') {
+    console.log('[test-server] /hang.mp4 收到请求，保持连接不响应');
+    return;
+  }
+
   if (!url.pathname.endsWith('.mp4')) {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ ok: true, size: SIZE }));

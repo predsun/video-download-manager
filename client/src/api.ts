@@ -22,18 +22,28 @@ interface ErrorBody {
   error?: { code?: string; message?: string };
 }
 
-async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
+async function request<T>(path: string, options: RequestInit = {}, timeoutMs = 30000): Promise<T> {
   const headers: Record<string, string> = {};
   if (options.body != null) headers['Content-Type'] = 'application/json';
+
+  // 客户端超时保护：避免服务端异常时页面无限等待
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
 
   let res: Response;
   try {
     res = await fetch(`/api${path}`, {
       ...options,
       headers,
+      signal: ctrl.signal,
     });
-  } catch {
+  } catch (e) {
+    if (e instanceof DOMException && e.name === 'AbortError') {
+      throw new ApiError('请求超时，请稍后重试', 'TIMEOUT', 408);
+    }
     throw new ApiError('无法连接到服务器，请确认后端已启动', 'NETWORK_ERROR', 0);
+  } finally {
+    clearTimeout(timer);
   }
 
   const data = (await res.json().catch(() => ({}))) as T & ErrorBody;
@@ -47,7 +57,9 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
 export const api = {
   health: () => request<{ ok: boolean; version: string }>('/health'),
 
-  parse: (url: string) => request<ParseResult>('/tasks/parse', { method: 'POST', body: JSON.stringify({ url }) }),
+  // 解析需要拉取元数据，服务端上限约 120s，这里给 150s 余量
+  parse: (url: string) =>
+    request<ParseResult>('/tasks/parse', { method: 'POST', body: JSON.stringify({ url }) }, 150000),
 
   createTask: (url: string, quality?: string, format?: string) =>
     request<Task>('/tasks', { method: 'POST', body: JSON.stringify({ url, quality, format }) }),

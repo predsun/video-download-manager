@@ -2,6 +2,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { config } from '../config';
+import { killProcessTree } from '../util/proc';
 
 function onPath(cmd: string): boolean {
   try {
@@ -83,12 +84,22 @@ export function runYtdlp(args: string[], timeoutMs: number): Promise<YtdlpResult
     const child = spawn(bin, args, { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
     let stdout = '';
     let stderr = '';
+    let settled = false;
+    let timedOut = false;
+
+    const finish = (result: YtdlpResult) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(result);
+    };
+
     const timer = setTimeout(() => {
-      try {
-        child.kill();
-      } catch {
-        /* ignore */
-      }
+      timedOut = true;
+      void killProcessTree(child, true);
+      // 关键：不依赖子进程的 close 事件。若 kill 失败或 stdout/stderr 管道被
+      // 孙进程占住，close 可能永不触发，导致 HTTP 请求永久挂起。
+      finish({ stdout, stderr: stderr || 'timeout', code: null });
     }, timeoutMs);
 
     child.stdout.on('data', (d) => {
@@ -98,12 +109,11 @@ export function runYtdlp(args: string[], timeoutMs: number): Promise<YtdlpResult
       stderr += d.toString();
     });
     child.on('error', (err) => {
-      clearTimeout(timer);
-      resolve({ stdout, stderr: err.message, code: null });
+      finish({ stdout, stderr: err.message, code: null });
     });
     child.on('close', (code) => {
-      clearTimeout(timer);
-      resolve({ stdout, stderr, code });
+      if (timedOut) return; // 已按超时返回，忽略迟到的 close
+      finish({ stdout, stderr, code });
     });
   });
 }

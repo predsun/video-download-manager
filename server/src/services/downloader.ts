@@ -1,6 +1,7 @@
-import { spawn, ChildProcess } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { findFfmpeg, findYtdlp } from './ytdlp';
+import { killProcessTree } from '../util/proc';
 import { AppError, ErrorMessages, classifyYtdlpError } from '../errors';
 import { AppSettings, ProgressEvent } from '../types';
 
@@ -121,46 +122,7 @@ function buildArgs(ctx: DownloadContext, hasFfmpeg: boolean): string[] {
   return args;
 }
 
-// 结束 yt-dlp 进程树。注意：Windows 上控制台程序收不到 SIGTERM，
-// 因此无论 «暂停» 还是 «取消» 都用 taskkill /T /F 强制结束；
-// .part 分片文件会保留，恢复下载时由 yt-dlp --continue 断点续传。
-function killProcessTree(child: ChildProcess, force: boolean): Promise<void> {
-  return new Promise((resolve) => {
-    const pid = child.pid;
-    if (!pid) return resolve();
-    if (process.platform === 'win32') {
-      const killer = spawn('taskkill', ['/pid', String(pid), '/T', '/F'], {
-        stdio: 'ignore',
-        windowsHide: true,
-      });
-      killer.on('error', () => {
-        try {
-          child.kill();
-        } catch {
-          /* ignore */
-        }
-        resolve();
-      });
-      killer.on('close', () => resolve());
-    } else {
-      child.kill(force ? 'SIGKILL' : 'SIGTERM');
-      if (force) return resolve();
-      const t = setTimeout(() => {
-        try {
-          child.kill('SIGKILL');
-        } catch {
-          /* ignore */
-        }
-        resolve();
-      }, 3000);
-      child.once('exit', () => {
-        clearTimeout(t);
-        resolve();
-      });
-    }
-  });
-}
-
+// 结束 yt-dlp 进程树（实现见 util/proc，解析与下载共用）
 function parseProgress(line: string): ProgressEvent | null {
   const marker = 'PROGRESS ';
   if (!line.startsWith(marker)) return null;
